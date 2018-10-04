@@ -7,8 +7,6 @@ const bitcoin = require('bitcoinjs-lib');
 const bitcoinMessage = require('bitcoinjs-message');
 
 
-
-//npm install --save sha256
 const app = express()
 app.use(bodyParser.json())
 
@@ -44,6 +42,22 @@ class ValidRequestList {
 class Blockchain {
     constructor(){
         this.chain = [];
+        this.addBlock(new Block("First block in the chain - Genesis block"));
+    }
+      // Add new block
+    addBlock(newBlock){
+        // Block height
+        newBlock.height = this.chain.length;
+        // UTC timestamp
+        newBlock.time = new Date().getTime().toString().slice(0,-3);
+        // previous block hash
+        if(this.chain.length>0){
+            newBlock.previousBlockHash = this.chain[this.chain.length-1].hash;
+        }
+        // Block hash with SHA256 using newBlock and converting to a string
+        newBlock.hash = sha256(JSON.stringify(newBlock)).toString();
+        // Adding block object to chain
+        this.chain.push(newBlock);
     }
 }
 
@@ -68,8 +82,17 @@ app.get('/stars/hash::hash', function(req, res) {
     //console.log(req.params.hash);
     let hash = req.params.hash;
     let block = blockchain.chain.filter(x => x.hash===hash)[0];
+    res.setHeader('Content-Type', 'application/json');
     if (block){
-        res.send(JSON.stringify(block));
+        if (block.body.star)
+        {
+            let storyDecoded = (block.body.star?hexa_to_ascii(block.body.star.story):"");
+            res.send(JSON.stringify({...block,body:{...block.body, star:{...block.body.star,storyDecoded}}}));
+        }
+        else
+        {
+            res.send(JSON.stringify(block));
+        }
     }
     else
     {
@@ -79,11 +102,22 @@ app.get('/stars/hash::hash', function(req, res) {
 
 
 app.get('/block/:height', function(req, res) {
-    //console.log(req.params.hash);
+    
     let height = req.params.height;
     let block = blockchain.chain.filter(x => x.height===parseInt(height))[0];
+
+    //console.log("get by height", block);
+    res.setHeader('Content-Type', 'application/json');
     if (block){
-        res.send(JSON.stringify(block));
+        if (block.body.star)
+        {
+            let storyDecoded = (block.body.star?hexa_to_ascii(block.body.star.story):"");
+            res.send(JSON.stringify({...block,body:{...block.body, star:{...block.body.star,storyDecoded}}}));
+        }
+        else
+        {
+            res.send(JSON.stringify(block));
+        }
     }
     else
     {
@@ -95,8 +129,14 @@ app.get('/stars/address::address', function(req, res) {
     //console.log(req.params.hash);
     let address = req.params.address;
     let blocks = blockchain.chain.filter(x => x.body.address===address);
-    if (blocks){
-        res.send(JSON.stringify(blocks));
+    let blockToRespond = [];
+    for (var i = 0; i < blocks.length; i++) {
+        let storyDecoded = hexa_to_ascii(blocks[i].body.star.story);
+        blockToRespond.push({...blocks[i],body:{...blocks[i].body, star:{...blocks[i].body.star,storyDecoded}}});
+    }
+    res.setHeader('Content-Type', 'application/json');
+    if (blockToRespond){    
+        res.send(JSON.stringify(blockToRespond));
     }
     else
     {
@@ -113,6 +153,9 @@ app.post('/block',(req,res)=>{
     console.log("=========validRequest=========");
     console.log(validRequest);
     let currentTimeStamp = new Date().getTime().toString().slice(0,-3);
+
+    res.setHeader('Content-Type', 'application/json');
+
     if (!validRequest) {
         res.send({error:'Request from this wallet has not been verified. Please verify the signed message first.'});
         return;
@@ -137,7 +180,15 @@ app.post('/block',(req,res)=>{
         return;
     }
 
-    if (star.story.length>250)
+    
+    if (!checkIsAscii(star.story))
+    {
+        res.send({error:'Please make sure star story is in ascii format.'});
+        return;
+    }
+
+
+    if (star.story.split(" ").length>250)
     {
         res.send({error:'star story is limited to 250 words.'});
         return;
@@ -150,30 +201,58 @@ app.post('/block',(req,res)=>{
 
 
     let block = new Block({address,star});
-    block.time = new Date().getTime().toString().slice(0,-3);
-    block.height = blockchain.chain.length+1;
-    if (blockchain.chain.length>0)
-    {
-        block.previousBlockHash = blockchain.chain[blockchain.chain.length-1].hash;
-    }
-    block.hash= sha256(JSON.stringify(block));
-    //console.log(block);
+    // block.time = new Date().getTime().toString().slice(0,-3);
+    // block.height = blockchain.chain.length+1;
+    // if (blockchain.chain.length>0)
+    // {
+    //     block.previousBlockHash = blockchain.chain[blockchain.chain.length-1].hash;
+    // }
+    // block.hash= sha256(JSON.stringify(block));
+    // //console.log(block);
 
-    blockchain.chain.push(block);
+    blockchain.addBlock(block);
     res.send(JSON.stringify(block));
+
+    //successfully registered, remove the validated request so the user must re-init the request to register a new star
+    validReqList.list = validReqList.list.filter(x => x.status.address!==address);
+    reqList.list = reqList.list.filter(x => x.address!=address);
 
 
 })
 
+function checkIsAscii(str){
+    for (var n = 0; n < str.length; n ++) 
+    {
+        if (str.charCodeAt(n)>127)
+        {
+            return false;
+            break;
+        }
+    }
+    return true;
+}
+//storyDecoded
 function ascii_to_hexa(str)
 {
-var arr1 = [];
-for (var n = 0, l = str.length; n < l; n ++) 
-{
-    var hex = Number(str.charCodeAt(n)).toString(16);
-    arr1.push(hex);
+    var arr1 = [];
+    for (var n = 0, l = str.length; n < l; n ++) 
+    {
+        var hex = Number(str.charCodeAt(n)).toString(16);
+        arr1.push(hex);
+    }
+    return arr1.join('');
 }
-return arr1.join('');
+
+//hexa_to_ascii("466f756e642073746172207573696e672068747470733a2f2f7777772e676f6f676c652e636f6d2f736b792f")
+function hexa_to_ascii(str)
+{
+    var arr1 = [];
+    for (var n = 0; n <  str.length/2; n ++) 
+    {
+        console.log()
+        arr1.push(String.fromCharCode(parseInt(str.slice(n*2,n*2+2), 16)))
+    }
+    return arr1.join('');
 }
 
 app.post('/requestValidation',(req, res) => {
@@ -181,15 +260,23 @@ app.post('/requestValidation',(req, res) => {
     console.log(req.body);
     let address = req.body.address
 
+    
+    let theRequest = reqList.list.filter(x => x.address===address)[0];
     //remove previous record
     reqList.list = reqList.list.filter(x => x.address!=address);
     
-
-    let theRequest = new OwnerRequest(req.body.address)
-    theRequest.requestTimeStamp = new Date().getTime().toString().slice(0,-3)
-    theRequest.message = util.format("%s:%s:%s" ,theRequest.address, theRequest.requestTimeStamp,REQUEST_ACTION);
-    theRequest.validationWindow=300
-
+    let currTimeStamp = new Date().getTime().toString().slice(0,-3);
+    if (!theRequest || 300 - (currTimeStamp - theRequest.requestTimeStamp)<0){
+        theRequest = new OwnerRequest(req.body.address)
+        theRequest.requestTimeStamp = new Date().getTime().toString().slice(0,-3)
+        theRequest.message = util.format("%s:%s:%s" ,theRequest.address, theRequest.requestTimeStamp,REQUEST_ACTION);
+        theRequest.validationWindow=300
+    }
+    else {
+        //if previous record exsit and has not expired, just update the validationWindow
+        theRequest.validationWindow = 300 - (currTimeStamp - theRequest.requestTimeStamp) ;
+    }
+    
     
     reqList.list.push(theRequest)
 
